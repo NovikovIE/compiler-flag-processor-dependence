@@ -13,7 +13,7 @@ import numpy as np
 BENCHMARK_ROOT_DIR = Path("./cbench/src")
 INPUT_DATA_DIR = Path("./input_data")
 
-CPU_ARCH = 'x86_64'
+CPU_ARCH = 'arm64'
 
 RESULTS_CSV = f"cbench_results_{CPU_ARCH}.csv"
 ERROR_LOG = "error_log.txt"
@@ -25,7 +25,11 @@ INPUT_FILE_SIZE_MB = 10
 # 3. Compiler
 #    On Linux this is usually "gcc".
 #    On macOS after installing via Homebrew, this is usually "gcc-13" or "gcc-14".
-COMPILER = "gcc" 
+# COMPILER = "gcc" 
+if platform.system() == "Darwin":
+    COMPILER = "gcc-13"
+else:
+    COMPILER = "gcc"
 
 # 4. Baseline optimization level
 BASE_OPT_LEVEL = "-O3"
@@ -80,6 +84,16 @@ BENCHMARK_CONFIG = {
     "malloc-malloc4": {"type": "cpu"},
 }
 
+SYSTEM_SPECIFIC_FLAGS = []
+if platform.system() == "Darwin":
+    # On macOS with Apple Silicon, Homebrew is in /opt/homebrew.
+    # For Intel Macs, you might need to change this to "/usr/local".
+    HOMEBREW_PREFIX = "/opt/homebrew"
+    SYSTEM_SPECIFIC_FLAGS = [
+        f"-I{HOMEBREW_PREFIX}/include",
+        f"-L{HOMEBREW_PREFIX}/lib"
+    ]
+
 # --- CONFIG END ---
 
 
@@ -118,9 +132,11 @@ def run_and_measure(benchmark_name, run_command_base, run_type, input_file_path,
         run_command.insert(0, "-c")
         run_command.insert(0, "taskset")
     elif system == "Darwin":
-        run_command.insert(0, "-i")
-        run_command.insert(0, "-B")
-        run_command.insert(0, "taskpolicy")
+        # Using a custom utility (`mac_taskset`) that uses the Apple-supported
+        # `thread_policy_set` API, which is not blocked by System Integrity Protection (SIP).
+        # We will use the physical core number `6` as the "affinity tag".
+        run_command.insert(0, "6")              # Affinity tag (the P-core number)
+        run_command.insert(0, "./mac_taskset")  
     
     exec_times = []
     run_options = {"stdout": subprocess.DEVNULL, "stderr": subprocess.PIPE, "check": True}
@@ -175,7 +191,7 @@ def main():
     if system == "Linux":
         print("Detected Linux: will use 'taskset -c 1' to bind to CPU core.")
     elif system == "Darwin":
-        print("Detected macOS: will use 'taskpolicy -B -i' to increase priority.")
+        print("Detected macOS: will use 'mac_taskset' to pin to a Performance Core.")
     
     print(f"Benchmarks found: {len(benchmarks)}")
     print(f"Total number of configurations for testing: {total_runs}")
@@ -196,7 +212,7 @@ def main():
             baseline_exe = Path(f"bin/{benchmark_name}_baseline")
             try:
                 print("  Building and measuring baseline (-O3)...", end="", flush=True)
-                baseline_compile_command = [COMPILER, BASE_OPT_LEVEL] + source_files + ["-o", str(baseline_exe), "-lm", "-lgmp"]
+                baseline_compile_command = [COMPILER, BASE_OPT_LEVEL] + SYSTEM_SPECIFIC_FLAGS + source_files + ["-o", str(baseline_exe), "-lm", "-lgmp"]
                 subprocess.run(baseline_compile_command, check=True, capture_output=True, text=True)
                 
                 config = BENCHMARK_CONFIG.get(benchmark_name, {"type": "cpu"})
@@ -223,7 +239,7 @@ def main():
                 print(f"  [Configuration {run_counter}/{total_runs}] Combination {i+1}/{len(combinations)}...", end="", flush=True)
 
                 output_exe = Path(f"bin/{benchmark_name}_{i}")
-                compile_command = [COMPILER, BASE_OPT_LEVEL] + list(flag_combo) + source_files + ["-o", str(output_exe), "-lm", "-lgmp"]
+                compile_command = [COMPILER, BASE_OPT_LEVEL] + SYSTEM_SPECIFIC_FLAGS + list(flag_combo) + source_files + ["-o", str(output_exe), "-lm", "-lgmp"]
 
                 try:
                     subprocess.run(compile_command, check=True, capture_output=True, text=True)

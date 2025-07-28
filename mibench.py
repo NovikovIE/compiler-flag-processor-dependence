@@ -6,18 +6,24 @@ import csv
 from pathlib import Path
 import platform
 import numpy as np
+import sys
 
 # --- CONFIG ---
 
 # 1. Dirs
-CPU_ARCH = 'x86_64'
+CPU_ARCH = 'arm64'
 
 MIBENCH_ROOT_DIR = Path("./mibench")
 RESULTS_CSV = Path(f"mibench_results_{CPU_ARCH}.csv")
 ERROR_LOG = Path("mibench_subset_error_log.txt")
 
 # 2. Compiler and flags
-COMPILER = "gcc"
+# COMPILER = "gcc"
+if platform.system() == "Darwin":
+    COMPILER = "gcc-13"
+else:
+    COMPILER = "gcc"
+
 BASE_OPT_LEVEL = "-O3"
 N_EXECUTE = 30
 N_WARMUP = 2
@@ -43,15 +49,21 @@ BENCHMARK_CONFIG = {
     },
     "automotive_susan_s": {
         "build_dir": "automotive/susan", "make_target": "susan", "run_executable": "susan",
-        "input_type": "script", "input_gen": ["python", "input_generation/generate_susan_input.py", "1920", "1080"], 
+        "input_type": "script", "input_gen": [sys.executable, "input_generation/generate_susan_input.py", "1920", "1080"], 
         "args": ["input_data/susan_input.pgm", "output_susan.pgm", "-s"]
     },
     "network_dijkstra": {
         "build_dir": "network/dijkstra", "make_target": "dijkstra", "run_executable": "dijkstra",
-        "input_type": "script", "input_gen": ["python", "input_generation/generate_dijkstra_input.py", "10000"],
+        "input_type": "script", "input_gen": [sys.executable, "input_generation/generate_dijkstra_input.py", "10000"],
         "args": ["200", "input_data/dijkstra_input.dat"] 
     },
 }
+
+SYSTEM_SPECIFIC_CFLAGS = ""
+if platform.system() == "Darwin":
+    HOMEBREW_PREFIX = "/opt/homebrew"
+    SYSTEM_SPECIFIC_CFLAGS = f"-I{HOMEBREW_PREFIX}/include -L{HOMEBREW_PREFIX}/lib"
+
 
 # --- CONFIG END ---
 
@@ -78,7 +90,7 @@ def build_benchmark(build_dir, make_target, cflags):
         subprocess.run(["make", "clean"], check=True, capture_output=True, text=True)
         env = os.environ.copy()
         env["CC"] = COMPILER
-        env["CFLAGS"] = cflags
+        env["CFLAGS"] = f"{cflags} {SYSTEM_SPECIFIC_CFLAGS}"
         subprocess.run(["make", make_target], env=env, check=True, capture_output=True, text=True)
     finally:
         os.chdir(original_dir)
@@ -93,9 +105,17 @@ def run_and_measure(executable_path, config, n_warmup, n_runs):
         base_command.insert(0, "-c")
         base_command.insert(0, "taskset")
     elif system == "Darwin":
-        base_command.insert(0, "-i")
-        base_command.insert(0, "-B")
-        base_command.insert(0, "taskpolicy")
+        # Using a custom utility (`mac_taskset`) that uses the Apple-supported
+        # `thread_policy_set` API, which is not blocked by System Integrity Protection (SIP).
+        # We will use the physical core number `6` (a P-Core) as the "affinity tag".
+
+        # CRITICAL: We need an ABSOLUTE path to mac_taskset, because the subprocess
+        # will change its current working directory (CWD).
+        mac_taskset_path = Path.cwd().resolve() / "mac_taskset"
+        
+        base_command.insert(0, "6")                      # Affinity tag
+        base_command.insert(0, str(mac_taskset_path))    # Absolute path to our utility
+
 
     if "args" in config:
         args = [str(MIBENCH_ROOT_DIR / arg) if "input_data" in arg else arg for arg in config["args"]]
@@ -147,7 +167,7 @@ def main():
     if system == "Linux":
         print("Detected Linux: will use 'taskset -c 1' to bind to CPU core.")
     elif system == "Darwin":
-        print("Detected macOS: will use 'taskpolicy -B -i' to increase priority.")
+        print("Detected macOS: will use 'mac_taskset' to pin to a Performance Core.")
     
     print(f"Benchmarks for testing: {', '.join(BENCHMARK_CONFIG.keys())}")
     print(f"Total number of flag combinations: {len(combinations)}")
@@ -181,7 +201,7 @@ def main():
                 continue
 
             for i, flag_combo in enumerate(combinations):
-                cflags = f"{BASE_OPT_LEVEL} {' '.join(flag_combo)}"
+                cflags = f"{BASE_OPT_LEVEL} {SYSTEM_SPECIFIC_CFLAGS} {' '.join(flag_combo)}"
                 print(f"  [Configuration {i+1}/{len(combinations)}]...", end="", flush=True)
 
                 try:

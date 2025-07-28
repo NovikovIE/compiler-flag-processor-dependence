@@ -302,7 +302,7 @@ typedef float      TOTAL_TYPE; /* for my PowerPC accelerator only */
 #include <string.h>
 #include <math.h>
 #include <sys/file.h>    /* may want to remove this line */
-#include <malloc.h>      /* may want to remove this line */
+// #include <malloc.h>      /* may want to remove this line */
 #define  exit_error(IFB,IFC) { fprintf(stderr,IFB,IFC); exit(0); }
 #define  FTOI(a) ( (a) < 0 ? ((int)(a-0.5)) : ((int)(a+0.5)) )
 typedef  unsigned char uchar;
