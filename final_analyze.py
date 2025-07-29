@@ -103,11 +103,19 @@ def run_and_collect_distribution(run_command_base, config, n_warmup, n_runs):
     if system == "Linux":
         run_command.insert(0, "1"); run_command.insert(0, "-c"); run_command.insert(0, "taskset")
     elif system == "Darwin":
-        mac_taskset_path = Path.cwd().resolve() / "mac_taskset"
+        # CRITICAL: We need an ABSOLUTE path to mac_taskset, because the subprocess
+        # will change its current working directory (CWD).
+        # We assume mac_taskset is in the same directory as this script.
+        script_dir = Path(__file__).parent.resolve()
+        mac_taskset_path = script_dir / "mac_taskset"
+
         if mac_taskset_path.exists():
              run_command.insert(0, "6"); run_command.insert(0, str(mac_taskset_path))
         else:
-            print("\nПРЕДУПРЕЖДЕНИЕ: mac_taskset не найден. Запуск без привязки к ядру.", end="")
+            # This is a critical error for benchmarking, so we should stop.
+            print(f"\nОШИБКА: Утилита для привязки к ядру не найдена по пути: {mac_taskset_path}")
+            print("Пожалуйста, скомпилируйте mac_taskset.c и положите его рядом со скриптом.")
+            sys.exit(1)
 
     exec_times = []
     run_options = {"stdout": subprocess.DEVNULL, "stderr": subprocess.PIPE, "check": True}
@@ -146,7 +154,7 @@ def run_and_collect_distribution(run_command_base, config, n_warmup, n_runs):
     return exec_times
 
 def build_cbench(source_files, output_exe, flags):
-    compile_command = [COMPILER, BASE_OPT_LEVEL] + flags + source_files + ["-o", str(output_exe), "-lm", "-lgmp"]
+    compile_command = [COMPILER, BASE_OPT_LEVEL] + flags + SYSTEM_SPECIFIC_CFLAGS.split() + source_files + ["-o", str(output_exe), "-lm", "-lgmp"]    
     subprocess.run(compile_command, check=True, capture_output=True, text=True)
 
 def build_mibench(build_dir, make_target, flags):
@@ -156,7 +164,7 @@ def build_mibench(build_dir, make_target, flags):
         subprocess.run(["make", "clean"], check=True, capture_output=True, text=True)
         env = os.environ.copy()
         env["CC"] = COMPILER
-        env["CFLAGS"] = f"{BASE_OPT_LEVEL} {SYSTEM_SPECIFIC_CFLAGS} {' '.join(flags)}"
+        env["CFLAGS"] = f"{BASE_OPT_LEVEL} {SYSTEM_SPECIFIC_CFLAGS} {' '.join(flags)} -lm"
         subprocess.run(["make", make_target], env=env, check=True, capture_output=True, text=True)
     finally:
         os.chdir(original_dir)
